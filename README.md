@@ -16,14 +16,21 @@ This repo provides:
 ### 1. Setup
 
 ```bash
-# Create virtual environment
-python -m venv .venv
+# Run the setup script
+./setup.sh
+
+# Activate the environment
 source .venv/bin/activate
 
-# Install dependencies
-pip install chutes httpx requests loguru
+# Register with Chutes (if not already)
+chutes register
+```
 
-# Register with Chutes (creates ~/.chutes/config.ini)
+Or manually:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 chutes register
 ```
 
@@ -86,7 +93,9 @@ This will:
 
 ```
 chutes-wrappers/
+├── setup.sh                     # Quick setup script
 ├── deploy.sh                    # Main CLI script
+├── requirements.txt             # Python dependencies
 ├── deploy_example.py            # Template for new chutes
 ├── deploy_example_original.py   # Reference: SGLang-style chute
 ├── config.ini.example           # Chutes config template
