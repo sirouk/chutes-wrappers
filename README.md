@@ -2,6 +2,8 @@
 
 A toolkit for wrapping Docker images and deploying them on [Chutes.ai](https://chutes.ai).
 
+For full Chutes SDK documentation, see the [Image API Reference](https://chutes.ai/docs/sdk-reference/image).
+
 ## Overview
 
 This repo provides:
@@ -45,10 +47,20 @@ cp deploy_example.py deploy_myservice.py
 Edit `deploy_myservice.py`:
 
 ```python
+from chutes.chute import Chute, NodeSelector
+from tools.chute_wrappers import (
+    build_wrapper_image,
+    load_route_manifest,
+    register_passthrough_routes,
+    wait_for_services,
+    probe_services,
+)
+
 # Basic identification
 CHUTE_NAME = "myservice"
 CHUTE_TAG = "v1.0.0"
 CHUTE_BASE_IMAGE = "your-registry/your-image:latest"
+SERVICE_PORTS = [8080]  # Ports your service exposes
 
 # Environment variables for the container
 CHUTE_ENV = {
@@ -60,9 +72,23 @@ CHUTE_STATIC_ROUTES = [
     {"path": "/predict", "method": "POST", "port": 8080, "target_path": "/predict"},
 ]
 
-# Resource requirements
-CHUTE_GPU_COUNT = 1
-CHUTE_MIN_VRAM_GB_PER_GPU = 16
+# Build image
+image = build_wrapper_image(USERNAME, CHUTE_NAME, CHUTE_TAG, CHUTE_BASE_IMAGE)
+
+# Create chute
+chute = Chute(
+    username=USERNAME,
+    name=CHUTE_NAME,
+    image=image,
+    node_selector=NodeSelector(gpu_count=1, min_vram_gb_per_gpu=16),
+)
+
+# Register routes from manifest + static routes
+register_passthrough_routes(chute, load_route_manifest(static_routes=CHUTE_STATIC_ROUTES), SERVICE_PORTS[0])
+
+@chute.on_startup()
+async def boot(self):
+    await wait_for_services(SERVICE_PORTS)
 ```
 
 ### 3. Discover Routes
@@ -133,9 +159,20 @@ In your `deploy_*.py`:
 | `CHUTE_BASE_IMAGE` | Docker image to wrap |
 | `CHUTE_TAGLINE` | Short description |
 | `CHUTE_DOC` | Markdown documentation |
-| `CHUTE_ENV` | Environment variables dict |
-| `CHUTE_STATIC_ROUTES` | Routes to always include |
+| `CHUTE_ENV` | Environment variables dict (used by route discovery) |
+| `CHUTE_STATIC_ROUTES` | Routes to always include (merged with discovered routes) |
 | `SERVICE_PORTS` | Ports to wait for on startup |
+
+### Helper Functions (from `tools/chute_wrappers.py`)
+
+| Function | Description |
+|----------|-------------|
+| `build_wrapper_image()` | Create a Chutes-compatible image from a base Docker image |
+| `load_route_manifest()` | Load routes from `.routes.json` and merge with static routes |
+| `register_passthrough_routes()` | Register all routes as passthrough cords on the chute |
+| `wait_for_services()` | Block until all service ports are accepting connections |
+| `probe_services()` | Check service health, returns list of errors |
+| `parse_service_ports()` | Parse comma-separated port string to list of ints |
 
 ## Route Discovery
 
@@ -201,15 +238,23 @@ The following routes are automatically filtered out:
 
 ## Examples
 
-### Wrapping a TTS/STT Service
+### Wrapping a TTS/STT Service (XTTS + Whisper)
 
 ```python
-CHUTE_NAME = "tts-whisper"
-CHUTE_BASE_IMAGE = "your-registry/tts-whisper:latest"
-SERVICE_PORTS = [8020, 8080]  # TTS on 8020, Whisper on 8080
+from chutes.chute import Chute, NodeSelector
+from tools.chute_wrappers import (
+    build_wrapper_image, load_route_manifest, register_passthrough_routes,
+    wait_for_services, probe_services,
+)
+
+CHUTE_NAME = "xtts-whisper"
+CHUTE_TAG = "tts-stt-v0.1.0"
+CHUTE_BASE_IMAGE = "elbios/xtts-whisper:latest"
+SERVICE_PORTS = [8020, 8080]  # XTTS on 8020, Whisper on 8080
 
 CHUTE_ENV = {
     "WHISPER_MODEL": "large-v3-turbo",
+    "XTTS_MODEL_ID": "tts_models/multilingual/multi-dataset/xtts_v2",
 }
 
 # Whisper.cpp doesn't expose OpenAPI, so define routes manually
@@ -218,6 +263,28 @@ CHUTE_STATIC_ROUTES = [
     {"path": "/load", "method": "GET", "port": 8080, "target_path": "/load"},
     {"path": "/v1/audio/transcriptions", "method": "POST", "port": 8080, "target_path": "/inference"},
 ]
+
+image = build_wrapper_image(USERNAME, CHUTE_NAME, CHUTE_TAG, CHUTE_BASE_IMAGE)
+
+chute = Chute(
+    username=USERNAME,
+    name=CHUTE_NAME,
+    tagline="XTTS + Whisper.cpp for TTS/STT",
+    image=image,
+    node_selector=NodeSelector(gpu_count=1, min_vram_gb_per_gpu=16),
+    concurrency=4,
+)
+
+register_passthrough_routes(chute, load_route_manifest(static_routes=CHUTE_STATIC_ROUTES), SERVICE_PORTS[0])
+
+@chute.on_startup()
+async def boot(self):
+    await wait_for_services(SERVICE_PORTS, timeout=600)
+
+@chute.cord(public_api_path="/health", public_api_method="GET", method="GET")
+async def health_check(self) -> dict:
+    errors = await probe_services(SERVICE_PORTS, timeout=5)
+    return {"status": "unhealthy", "errors": errors} if errors else {"status": "healthy"}
 ```
 
 ### Wrapping a Gradio App
@@ -226,9 +293,16 @@ CHUTE_STATIC_ROUTES = [
 CHUTE_NAME = "gradio-app"
 CHUTE_BASE_IMAGE = "your-registry/gradio-app:latest"
 SERVICE_PORTS = [7860]
+CHUTE_ENV = {}  # Add any required env vars
 
-# Let discovery find the routes (Gradio exposes OpenAPI)
-# Run: ./deploy.sh --discover deploy_gradio_app
+# Gradio exposes OpenAPI - use route discovery:
+# ./deploy.sh --discover deploy_gradio_app
+
+image = build_wrapper_image(USERNAME, CHUTE_NAME, CHUTE_TAG, CHUTE_BASE_IMAGE)
+chute = Chute(username=USERNAME, name=CHUTE_NAME, image=image, ...)
+
+# Routes loaded from deploy_gradio_app.routes.json (auto-discovered)
+register_passthrough_routes(chute, load_route_manifest(), SERVICE_PORTS[0])
 ```
 
 ## Troubleshooting
@@ -251,6 +325,34 @@ These are automatically filtered, but if you see this error, check your `CHUTE_S
 ### Remote Build Requires Balance
 
 Remote builds require >= $50 USD account balance. Use `--local` for local builds.
+
+## How It Works
+
+### Image Wrapping
+
+`build_wrapper_image()` creates a Chutes-compatible image by:
+
+1. Starting from your base Docker image
+2. Installing Python 3.12 and system dependencies (cmake, git, curl, etc.)
+3. Setting up a non-root `chutes` user with proper permissions
+4. Configuring Python paths and uv package manager
+5. Setting environment variables for Chutes runtime
+
+The resulting image can be built locally or remotely via Chutes' build infrastructure.
+
+### Route Registration
+
+Routes are registered as "cords" on your chute. Each cord:
+- Maps a public API path to an internal service port
+- Supports GET, POST, and other HTTP methods
+- Can be a passthrough (proxies directly to backend) or custom handler
+- Optionally supports streaming responses
+
+Routes are loaded from:
+1. `deploy_*.routes.json` (auto-discovered via OpenAPI)
+2. `CHUTE_STATIC_ROUTES` (manually defined)
+
+See the [Chutes SDK Cord Reference](https://chutes.ai/docs/sdk-reference/cord) for more details.
 
 ## License
 
