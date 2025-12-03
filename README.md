@@ -100,10 +100,13 @@ If your service exposes an OpenAPI spec, auto-discover routes:
 ./deploy.sh --discover deploy_myservice
 ```
 
-This will:
-1. Start your Docker image
-2. Probe for OpenAPI endpoints (`/openapi.json`, `/docs.json`, etc.)
-3. Generate `deploy_myservice.routes.json`
+This will interactively prompt for startup delay and probe timeout, then:
+1. Start your Docker image with GPU access
+2. Wait for services to initialize
+3. Probe for OpenAPI endpoints (`/openapi.json`, `/docs.json`, etc.)
+4. Generate `deploy_myservice.routes.json`
+
+For services without OpenAPI, define `CHUTE_STATIC_ROUTES` in your module instead.
 
 ### 4. Build & Deploy
 
@@ -120,16 +123,15 @@ This will:
 
 ```
 chutes-wrappers/
-├── setup.sh                     # Quick setup script
-├── deploy.sh                    # Main CLI script
+├── setup.sh                     # Environment setup (venv, deps, registration)
+├── deploy.sh                    # Main CLI (interactive + flags)
 ├── requirements.txt             # Python dependencies
 ├── deploy_example.py            # Template for new chutes
-├── deploy_example_original.py   # Reference: SGLang-style chute
-├── config.ini.example           # Chutes config template
 ├── tools/
 │   ├── __init__.py
 │   ├── chute_wrappers.py        # Image building & route registration
 │   └── discover_routes.py       # Route auto-discovery
+├── deploy_*.routes.json         # Generated route manifests (gitignored)
 └── README.md
 ```
 
