@@ -1,14 +1,18 @@
 """
-Generic Chute Deployment Template
+Docker Image Wrapper Template
 
 This template wraps a Docker image for deployment on Chutes.ai.
-Copy this file and customize the configuration section for your service.
+Use this when you have an existing Docker image to wrap as a Chute.
 
 Usage:
   1. Copy to deploy_<yourservice>.py
   2. Update CHUTE_* variables for your service
   3. Run route discovery: ./deploy.sh -> Build -> select module -> run discovery
   4. Build and deploy: ./deploy.sh -> Build/Deploy
+
+See also:
+  - deploy_example_sglang.py - For SGLang model serving
+  - deploy_example_imggen.py - For image generation models
 """
 import os
 from configparser import ConfigParser

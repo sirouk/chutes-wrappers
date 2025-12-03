@@ -12,7 +12,7 @@ This repo provides:
 - **`deploy.sh`** - Interactive CLI for building, testing, and deploying chutes
 - **`tools/chute_wrappers.py`** - Helper functions for wrapping Docker images
 - **`tools/discover_routes.py`** - Auto-discovers HTTP routes from running containers
-- **`deploy_example.py`** - Template for creating new wrapped chutes
+- **`deploy_example_docker.py`** - Template for wrapping Docker images
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ chutes register
 Copy the template and customize:
 
 ```bash
-cp deploy_example.py deploy_myservice.py
+cp deploy_example_docker.py deploy_myservice.py
 ```
 
 Edit `deploy_myservice.py`:
@@ -134,7 +134,7 @@ chutes-wrappers/
 ├── setup.sh                     # Environment setup (venv, deps, registration)
 ├── deploy.sh                    # Main CLI (interactive + flags)
 ├── requirements.txt             # Python dependencies
-├── deploy_example.py            # Template for new chutes
+├── deploy_example_docker.py     # Template for wrapping Docker images
 ├── tools/
 │   ├── __init__.py
 │   ├── chute_wrappers.py        # Image building & route registration
