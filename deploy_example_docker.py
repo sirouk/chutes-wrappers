@@ -11,8 +11,8 @@ Usage:
   4. Build and deploy: ./deploy.sh -> Build/Deploy
 
 See also:
-  - deploy_example_sglang.py - For SGLang model serving
-  - deploy_example_imggen.py - For image generation models
+  - vanilla_examples/deploy_example_sglang.py - For SGLang model serving
+  - vanilla_examples/deploy_example_imggen.py - For image generation models
 """
 import os
 from configparser import ConfigParser

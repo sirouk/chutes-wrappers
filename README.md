@@ -1,6 +1,6 @@
 # Chutes Wrappers
 
-Toolkit for wrapping upstream Docker images so they can be deployed, monitored, and iterated on via [Chutes.ai](https://chutes.ai). This repo mirrors the SkyrimNet chute tooling but keeps everything generic so you can reuse the same workflow for any service.
+Toolkit for wrapping upstream Docker images so they can be deployed, monitored, and iterated on via [Chutes.ai](https://chutes.ai). Everything here is vendor-neutral so you can reuse the exact workflow for any service that needs to run on Chutes.
 
 ---
 
@@ -22,14 +22,20 @@ source .venv/bin/activate
 **Strategy:** Keep the vendor image intact and inject the Chutes runtime so the exact same binaries continue to run. Only use the metadata-rebuild path (replaying steps onto the `parachutes/python` base) when you explicitly want a fresh foundation—for example, to audit each layer or to publish a clean-room replica. Even if the upstream container uses Conda or custom CUDA stacks, we still prefer to wrap *that* image so it behaves identically once deployed.
 
 ### Tooling
-- **Wrapper SDK (`tools/chute_wrappers.py`):** Injects system Python, the `chutes` user, OpenCL libs, and helper scripts into any base image. Handles route registration, startup waits, and health checks.
-- **Auto-Discovery (`deploy.sh --discover` / `tools/discover_routes.py`):** Boots the upstream image locally, probes common OpenAPI endpoints, and writes `deploy_*.routes.json` so passthrough cords can be generated automatically.
+- **Auto-Discovery (`deploy.sh --discover` / `tools/discover_routes.py`):** Boots the upstream image locally, probes common OpenAPI endpoints, and writes `deploy_*.routes.json` so passthrough cords can be generated automatically. Run this first so you know what the service exposes.
+- **Wrapper SDK (`tools/chute_wrappers.py`):** Injects system Python, the `chutes` user, OpenCL libs, and helper scripts into any base image. Handles route registration, startup waits, and health checks so that the original container keeps running unchanged.
 - **Image Generator (`tools/create_chute_from_image.py`):** Replays an existing Docker image’s metadata on top of the Chutes base (`deploy_*_auto.py`), giving you a reproducible python-first version that still launches the original entrypoint.
+- **Vanilla examples (`vanilla_examples/`):** Pure-Python chutes that instantiate `Chute`/`ChuteImage` directly—useful when you want the traditional `torch.cuda` debugging loop without the wrapper layer.
+
+### Typical Paths
+
+1. **Auto-Discovery + Wrapper (original image with Chutes injected).** Run discovery to capture the service’s OpenAPI, then call `build_wrapper_image()` so the upstream container keeps its own stack while inheriting the Chutes runtime. This is the fastest way to deploy vendor images unchanged.
+2. **Image Generator (Chutes base image with the original entrypoint).** Use `tools/create_chute_from_image.py` to rebuild the Dockerfile onto `parachutes/python`, but keep the upstream entrypoint so its services still launch exactly as before—ideal for auditing layers or when you need a reproducible base.
+3. **Vanilla Rebuild (Chutes base + rewritten services).** Start from the Chutes base image and reimplement services directly in Python (see `vanilla_examples/`). This gives you explicit `torch` usage, cords, and lifecycle hooks for the tightest debugging loop.
 
 ### Platform Context
-Chutes behaves like a less restrictive, GPU-aware AWS Lambda. Containers can stay warm, keep local caches, and expose arbitrary HTTP routes. The current router requires JSON payloads for billing and quota enforcement, so legacy `multipart/form-data` uploads (typical for `xtts` and `whisper.cpp`) must be converted to JSON with base64 audio.
+Chutes behaves like a less restrictive, GPU-aware AWS Lambda. Containers can stay warm, keep local caches, and expose arbitrary HTTP routes. The router expects JSON payloads for quota tracking—e.g., when adapting a legacy XTTS/Whisper workflow you’d wrap audio bytes in JSON (base64) or add a tiny proxy to do it automatically.
 
-- **Workaround Today:** Update clients (or add a thin proxy) to wrap binary blobs in JSON before hitting the chute.
 - **Future Direction:** Images can return JSON-wrapped audio responses as well, opening the door to multi-part emulation in the SDK later.
 
 ---
@@ -112,6 +118,20 @@ register_passthrough_routes(
 
 ---
 
+## Vanilla Examples (traditional chutes)
+
+Most guidance here focuses on wrapping upstream Docker images, but some services are still easier to express as straight Python modules. Those canonical “vanilla” samples live in `vanilla_examples/`:
+
+- `vanilla_examples/deploy_example_imggen.py` – Fully managed FastAPI chute that imports `ChuteImage`, keeps models on `torch.cuda`, and exposes inference cords directly.
+- `vanilla_examples/deploy_example_sglang.py` – Minimal `build_sglang_chute` example that matches the way first-party SGLang chutes are deployed.
+
+**Why bother with the vanilla path**
+- It is the original Chutes development flow: `import chutes`, allocate GPUs with `NodeSelector`, and call `torch.cuda.*` yourself, so stepping through failures is just Python debugging.
+- You can run these modules locally (`python vanilla_examples/deploy_example_imggen.py`) without rebuilding a wrapper image, which shortens the iteration loop.
+- Perfect when you are building the container from scratch and want explicit control over installs, caching, and warmup scripts.
+
+---
+
 ## Troubleshooting Cheat Sheet
 
 | Issue | Fix |
@@ -131,7 +151,11 @@ chutes-wrappers/
 ├── setup.sh                     # Environment setup (venv, deps, registration)
 ├── deploy.sh                    # Main CLI (interactive + flags)
 ├── requirements.txt             # Python deps
-├── deploy_example_*.py          # Reference modules
+├── deploy_example_docker.py     # Wrapper template for arbitrary images
+├── deploy_example_xtts_whisper.py  # Wrapper example for XTTS + Whisper
+├── vanilla_examples/            # Traditional pure-Python chute modules
+│   ├── deploy_example_imggen.py # Torch-based FastAPI image generator
+│   └── deploy_example_sglang.py # SGLang chute template
 ├── tools/
 │   ├── chute_wrappers.py        # Image builder, route helpers
 │   ├── discover_routes.py       # OpenAPI probing
@@ -148,4 +172,4 @@ chutes-wrappers/
 - [SDK Image Reference](https://chutes.ai/docs/sdk-reference/image)
 - [Registration Token](https://rtok.chutes.ai/users/registration_token)
 
-Everything in this repo stays in lock-step with the SkyrimNet chute bundle, so keeping these files synced guarantees the “wrapper” tooling behaves the same in both places. Let us know if you need the docs expanded to cover additional workflows (gRPC, websocket passthrough, etc.).
+Let us know if you need the docs expanded to cover additional workflows (gRPC, websocket passthrough, etc.).
