@@ -1,4 +1,4 @@
-# Chutes Wrappers
+# Chutes Jumpmaster
 
 Toolkit for wrapping upstream Docker images so they can be deployed, monitored, and iterated on via [Chutes.ai](https://chutes.ai). Everything here is vendor-neutral so you can reuse the exact workflow for any service that needs to run on Chutes.
 
@@ -147,7 +147,7 @@ Most guidance here focuses on wrapping upstream Docker images, but some services
 ## Repository Layout
 
 ```
-chutes-wrappers/
+chutes-jumpmaster/
 ├── setup.sh                     # Environment setup (venv, deps, registration)
 ├── deploy.sh                    # Main CLI (interactive + flags)
 ├── requirements.txt             # Python deps
