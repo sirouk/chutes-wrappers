@@ -406,6 +406,323 @@ register_chutes() {
     fi
 }
 
+get_api_key() {
+    if [[ -n "${CHUTES_API_KEY:-}" ]]; then
+        echo "$CHUTES_API_KEY"
+        return 0
+    fi
+
+    local key_file="$HOME/.chutes/api_key"
+    if [[ -f "$key_file" ]]; then
+        local key
+        key=$(head -n1 "$key_file" 2>/dev/null | tr -d '[:space:]')
+        if [[ -n "$key" ]]; then
+            echo "$key"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+get_api_base_url() {
+    if [[ -n "${CHUTES_API_BASE_URL:-}" ]]; then
+        echo "$CHUTES_API_BASE_URL"
+        return 0
+    fi
+    echo "https://api.chutes.ai"
+}
+
+link_existing_chutes_account() {
+    print_header "Link Existing Chutes Account (website → CLI)"
+
+    print_info "This updates /users/change_bt_auth and writes: $CHUTES_CONFIG"
+    print_info "Requires a Chutes API key (CHUTES_API_KEY or ~/.chutes/api_key)"
+    echo ""
+
+    local api_key=""
+    if api_key=$(get_api_key); then
+        : # ok
+    else
+        if $NON_INTERACTIVE; then
+            print_error "CHUTES_API_KEY not set and ~/.chutes/api_key missing (required for linking)"
+            return 1
+        fi
+        api_key=$(prompt_input "Chutes API key (cpk_...)" "")
+        if [[ -z "$api_key" ]]; then
+            print_error "API key is required"
+            return 1
+        fi
+        if confirm "Save API key to ~/.chutes/api_key for later?" "y"; then
+            mkdir -p "$HOME/.chutes"
+            printf "%s\n" "$api_key" > "$HOME/.chutes/api_key"
+            chmod 600 "$HOME/.chutes/api_key" 2>/dev/null || true
+            print_success "Saved ~/.chutes/api_key"
+        fi
+    fi
+
+    local base_url
+    base_url=$(get_api_base_url)
+
+    # Pick wallet/hotkey (defaults from prior steps if available)
+    local wallet_name="${WALLET_NAME:-}"
+    if [[ -z "$wallet_name" ]]; then
+        local wallets
+        if wallets=$(list_wallets); then
+            wallet_name=$(prompt_input "Wallet name (coldkey)" "$(echo "$wallets" | awk '{print $1}')")
+        else
+            wallet_name=$(prompt_input "Wallet name (coldkey)" "")
+        fi
+    else
+        wallet_name=$(prompt_input "Wallet name (coldkey)" "$wallet_name")
+    fi
+    if [[ -z "$wallet_name" ]]; then
+        print_error "Wallet name is required"
+        return 1
+    fi
+
+    local hotkey_name="${HOTKEY_NAME:-}"
+    if [[ -z "$hotkey_name" ]]; then
+        local hotkeys
+        if hotkeys=$(list_hotkeys "$wallet_name"); then
+            hotkey_name=$(prompt_input "Hotkey name" "$(echo "$hotkeys" | awk '{print $1}')")
+        else
+            hotkey_name=$(prompt_input "Hotkey name" "default")
+        fi
+    else
+        hotkey_name=$(prompt_input "Hotkey name" "$hotkey_name")
+    fi
+    if [[ -z "$hotkey_name" ]]; then
+        print_error "Hotkey name is required"
+        return 1
+    fi
+
+    local wallet_dir="$HOME/.bittensor/wallets/$wallet_name"
+    local coldkey_pub_file="$wallet_dir/coldkeypub.txt"
+    local hotkey_file="$wallet_dir/hotkeys/$hotkey_name"
+    if [[ ! -f "$coldkey_pub_file" ]]; then
+        print_error "Coldkey pub file not found: $coldkey_pub_file"
+        return 1
+    fi
+    if [[ ! -f "$hotkey_file" ]]; then
+        print_error "Hotkey file not found: $hotkey_file"
+        return 1
+    fi
+
+    local coldkey_ss58
+    coldkey_ss58=$(head -n1 "$coldkey_pub_file" 2>/dev/null | tr -d '[:space:]')
+    if [[ -z "$coldkey_ss58" ]]; then
+        print_error "Failed to read coldkey ss58 from $coldkey_pub_file"
+        return 1
+    fi
+
+    local parsed
+    parsed=$(python3 - "$hotkey_file" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+def pick(d, keys):
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+ss58 = pick(data, ["ss58Address", "ss58_address", "ss58"])
+seed = pick(data, ["secretSeed", "secret_seed", "seed"])
+if seed.startswith("0x"):
+    seed = seed[2:]
+
+if not ss58 or not seed:
+    raise SystemExit("missing ss58Address or secretSeed")
+
+print(f"{ss58}\t{seed}")
+PY
+) || {
+        print_error "Failed to parse hotkey JSON (need ss58Address + secretSeed): $hotkey_file"
+        return 1
+    }
+
+    local hotkey_ss58address=""
+    local hotkey_seed=""
+    IFS=$'\t' read -r hotkey_ss58address hotkey_seed <<<"$parsed"
+    if [[ -z "$hotkey_ss58address" || -z "$hotkey_seed" ]]; then
+        print_error "Failed to extract hotkey ss58/seed from $hotkey_file"
+        return 1
+    fi
+
+    local auth_header_primary="$api_key"
+    local auth_header_secondary="Bearer ${api_key}"
+    if [[ "$api_key" =~ ^[Bb]earer[[:space:]]+ ]]; then
+        auth_header_primary="$api_key"
+        auth_header_secondary="$api_key"
+    fi
+
+    # /users/me is optional, but gives us username/user_id/payment addresses for config
+    print_info "Fetching /users/me (for config fields)..."
+    local user_tmp
+    user_tmp=$(mktemp)
+    local code
+    code=$(curl -sS -o "$user_tmp" -w "%{http_code}" -H "Authorization: ${auth_header_primary}" "${base_url}/users/me" || true)
+    if [[ "$code" != "200" && "$auth_header_secondary" != "$auth_header_primary" ]]; then
+        code=$(curl -sS -o "$user_tmp" -w "%{http_code}" -H "Authorization: ${auth_header_secondary}" "${base_url}/users/me" || true)
+        if [[ "$code" == "200" ]]; then
+            local tmp="$auth_header_primary"
+            auth_header_primary="$auth_header_secondary"
+            auth_header_secondary="$tmp"
+        fi
+    fi
+
+    local username=""
+    local user_id=""
+    local payment_address=""
+    local developer_payment_address=""
+    if [[ "$code" == "200" ]]; then
+        local fields
+        fields=$(python3 - "$user_tmp" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+def find_first(obj, keys):
+    if isinstance(obj, dict):
+        for k in keys:
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for v in obj.values():
+            r = find_first(v, keys)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = find_first(v, keys)
+            if r:
+                return r
+    return ""
+
+username = find_first(data, ["username", "user_name", "name"])
+user_id = find_first(data, ["user_id", "id", "uid"])
+pay = find_first(data, ["payment_address", "paymentAddress", "address"])
+devpay = find_first(data, ["developer_payment_address", "developerPaymentAddress", "developer_address", "developerAddress"])
+
+print("\t".join([username, user_id, pay, devpay]))
+PY
+) || true
+        IFS=$'\t' read -r username user_id payment_address developer_payment_address <<<"$fields"
+    else
+        print_warning "Failed to fetch /users/me (HTTP $code). We'll still try to link, but may need manual config edits."
+    fi
+    rm -f "$user_tmp"
+
+    echo ""
+    [[ -n "$username" && -n "$user_id" ]] && print_info "Account: ${username} (${user_id})"
+    print_info "Coldkey: ${coldkey_ss58}"
+    print_info "Hotkey:  ${hotkey_ss58address}"
+    echo ""
+
+    if ! confirm "Update /users/change_bt_auth now?" "y"; then
+        print_warning "Cancelled"
+        return 0
+    fi
+
+    local payload
+    payload=$(printf '{"coldkey":"%s","hotkey":"%s"}' "$coldkey_ss58" "$hotkey_ss58address")
+
+    local resp_tmp
+    resp_tmp=$(mktemp)
+    code=$(curl -sS -o "$resp_tmp" -w "%{http_code}" -X POST "${base_url}/users/change_bt_auth" \
+        -H "Authorization: ${auth_header_primary}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" || true)
+    if [[ ! "$code" =~ ^2 ]] && [[ "$auth_header_secondary" != "$auth_header_primary" ]]; then
+        code=$(curl -sS -o "$resp_tmp" -w "%{http_code}" -X POST "${base_url}/users/change_bt_auth" \
+            -H "Authorization: ${auth_header_secondary}" \
+            -H "Content-Type: application/json" \
+            -d "$payload" || true)
+    fi
+    if [[ ! "$code" =~ ^2 ]]; then
+        print_error "Failed to update /users/change_bt_auth (HTTP $code)"
+        head -c 300 "$resp_tmp" 2>/dev/null || true
+        echo ""
+        rm -f "$resp_tmp"
+        return 1
+    fi
+
+    # Fallback: if /users/me didn't yield identity, try parsing change_bt_auth response.
+    if [[ -z "$username" || -z "$user_id" ]]; then
+        mapfile -t parsed_ident < <(python3 - "$resp_tmp" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+def pick(d, keys):
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+print(pick(data, ["username"]))
+print(pick(data, ["user_id", "id", "uid"]))
+PY
+) || true
+        username="${parsed_ident[0]:-}"
+        user_id="${parsed_ident[1]:-}"
+    fi
+
+    rm -f "$resp_tmp"
+
+    if [[ -z "$username" || -z "$user_id" ]]; then
+        print_error "Could not determine username/user_id for config. Re-run, or fill config.ini manually."
+        return 1
+    fi
+
+    if [[ -z "$payment_address" && ! $NON_INTERACTIVE ]]; then
+        payment_address=$(prompt_input "Payment address (TAO ss58) [optional]" "")
+    fi
+
+    if [[ -f "$CHUTES_CONFIG" && ! $FORCE_CHUTES ]]; then
+        if ! confirm "Overwrite existing $CHUTES_CONFIG?" "y"; then
+            print_warning "Cancelled"
+            return 0
+        fi
+    fi
+
+    mkdir -p "$(dirname "$CHUTES_CONFIG")"
+    local old_umask
+    old_umask=$(umask)
+    umask 077
+
+    local cfg_tmp
+    cfg_tmp=$(mktemp)
+    cat > "$cfg_tmp" <<EOF
+[api]
+base_url = ${base_url}
+
+[auth]
+username = ${username}
+user_id = ${user_id}
+hotkey_seed = ${hotkey_seed}
+hotkey_name = ${hotkey_name}
+hotkey_ss58address = ${hotkey_ss58address}
+
+[payment]
+address = ${payment_address}
+developer_payment_address = ${developer_payment_address}
+EOF
+    mv "$cfg_tmp" "$CHUTES_CONFIG"
+    chmod 600 "$CHUTES_CONFIG" 2>/dev/null || true
+    umask "$old_umask" 2>/dev/null || true
+
+    print_success "Linked wallet + wrote config: $CHUTES_CONFIG"
+    show_chutes_config
+}
+
 # =============================================================================
 # Interactive Menu
 # =============================================================================
@@ -440,7 +757,8 @@ show_chutes_menu() {
     echo ""
     echo -e "  ${GREEN}1)${NC} Show current account info"
     echo -e "  ${GREEN}2)${NC} Register new account"
-    echo -e "  ${GREEN}3)${NC} View config.ini.example"
+    echo -e "  ${GREEN}3)${NC} Link existing account to wallet (website → CLI)"
+    echo -e "  ${GREEN}4)${NC} View config.ini.example"
     echo -e "  ${GREEN}b)${NC} Back to main menu"
     echo ""
 }
@@ -610,14 +928,18 @@ run_full_setup() {
     else
         print_warning "Chutes config not found: ~/.chutes/config.ini"
         echo ""
-        echo -e "To register, you'll need a token from:"
-        echo -e "  ${CYAN}https://rtok.chutes.ai/users/registration_token${NC}"
-        echo ""
-        if confirm "Register with Chutes now?" "y"; then
-            register_chutes
+        if confirm "Already have a Chutes account (website) and want to link this wallet?" "n"; then
+            link_existing_chutes_account
         else
-            print_warning "Skipping Chutes registration"
-            print_info "You can register later via option 3 in the menu"
+            echo -e "To register, you'll need a token from:"
+            echo -e "  ${CYAN}https://rtok.chutes.ai/users/registration_token${NC}"
+            echo ""
+            if confirm "Register with Chutes now?" "y"; then
+                register_chutes
+            else
+                print_warning "Skipping Chutes registration"
+                print_info "You can link/register later via option 3 in the menu"
+            fi
         fi
     fi
     
@@ -683,6 +1005,9 @@ main() {
                             fi
                             ;;
                         3)
+                            link_existing_chutes_account
+                            ;;
+                        4)
                             if [[ -f "$CHUTES_CONFIG_EXAMPLE" ]]; then
                                 echo ""
                                 cat "$CHUTES_CONFIG_EXAMPLE"
