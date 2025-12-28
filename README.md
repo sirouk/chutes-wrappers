@@ -46,7 +46,7 @@ Chutes behaves like a less restrictive, GPU-aware AWS Lambda. Containers can sta
 Interactive wizard that:
 - Installs `uv` and creates `.venv` (Python 3.11)
 - Installs the `chutes` CLI and supporting deps
-- Helps you register / configure wallets in `~/.chutes/config.ini`
+- Helps you register a new Chutes account *or* link an existing website account to a Bittensor wallet in `~/.chutes/config.ini`
 
 ### 2. Deploy (`./deploy.sh`)
 Menu overview (press Enter for defaults when prompted):
@@ -54,19 +54,18 @@ Menu overview (press Enter for defaults when prompted):
 | Option | Description |
 |--------|-------------|
 | **1** Account info | Show username + payment address from config |
-| **2** List images | Built chute images |
-| **3** List chutes | Deployed chutes |
-| **4** Build chute from existing `deploy_*.py` (wraps `CHUTE_BASE_IMAGE`) |
-| **5** Create `deploy_*_auto.py` (replays image on Chutes base) |
-| **6** Run in Docker (GPU) | Sanity-check wrapped services |
-| **7** Run dev mode | Host-run for Python chutes |
-| **8** Deploy chute | Upload + schedule on Chutes.ai |
-| **9** Warmup once | Ping the chute so it spins up |
-| **10** Keep warm loop | Repeated warmup |
-| **11** Chute status | Calls `chutes chutes get` |
-| **12** Instance logs | Streams logs for active instances |
-| **13** Delete chute | Interactive safety checks |
-| **14** Delete image | Remove local/remote image |
+| **2** Link Bittensor wallet | Links an existing Chutes account to a local Bittensor wallet and writes `~/.chutes/config.ini` |
+| **3** Build chute | Build from local `deploy_*.py` (wraps `CHUTE_BASE_IMAGE`) |
+| **4** Create from Docker image | Creates a chute definition from an existing image |
+| **5** Run in Docker (GPU) | Sanity-check wrapped services |
+| **6** Run dev mode | Host-run for Python chutes |
+| **7** Deploy chute | Upload + schedule on Chutes.ai |
+| **8** Chute status | Health + instances |
+| **9** Instance logs | Streams logs for active instances |
+| **10** Warmup once | Trigger manual spin-up |
+| **11** Keep warm loop | Repeated warmup |
+| **12** List & delete chutes | Interactive safety checks |
+| **13** List & delete images | Remove built images |
 
 **CLI Examples**
 ```bash
